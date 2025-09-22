@@ -100,7 +100,7 @@ def default_py_value(campo):
     if t == "bool":
         return "True" if str(d).lower() in ("true","1","yes","sim") else "False"
     if t in ("datetime","date") and str(d).lower() == "now":
-        return "datetime.utcnow" if t == "datetime" else "date.today"
+        return "func.now()" if t == "datetime" else "date.today"
     return repr(d)
 
 def build_sqla_column(campo):
@@ -141,8 +141,8 @@ class %%ClassName%%Entity:
 '''
 
 MODEL_TMPL = '''"""Modelo SQLAlchemy para %%ClassName%%."""
-from datetime import datetime, date
-from extensions import db  # ajuste o import conforme seu projeto
+from api import db  
+from sqlalchemy.sql import func
 
 class %%ClassName%%(db.Model):
     __tablename__ = "%%table_name%%"
@@ -155,13 +155,14 @@ class %%ClassName%%(db.Model):
 
 SCHEMA_TMPL = '''"""Schema Marshmallow para %%ClassName%%."""
 from marshmallow import fields, validate
-from extensions import ma  # ajuste o import conforme seu projeto
-from %%module_model%% import %%ClassName%%
+from api import ma  # ajuste o import conforme seu projeto
+from ..models.%%module_model%% import %%ClassName%%
 
-class %%ClassName%%Schema(ma.SQLAlchemySchema):
+class %%ClassName%%Schema(ma.SQLAlchemyAutoSchema):
     class Meta:
         model = %%ClassName%%
         load_instance = True
+        fields=(%%init_params%%)
 
 %%fields%%
 '''
@@ -172,9 +173,10 @@ import uuid
 from werkzeug.utils import secure_filename
 from passlib.hash import pbkdf2_sha256
 from datetime import datetime, timedelta
-from extensions import db
-from %%module_model%% import %%ClassName%%
-from %%module_schema%% import %%ClassName%%Schema
+from api import db
+from sqlalchemy.sql import func, text
+from ..models.%%module_model%% import %%ClassName%%
+from ..schemas.%%module_schema%% import %%ClassName%%Schema
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "static", "files")
 
@@ -622,6 +624,10 @@ def build_entity_encapsulated_parts(campos):
     properties = "\n".join(_property_block_for_field(c) for c in campos)
     properties = indent(properties.rstrip() + "\n", 4)
     return init_params, init_body, properties
+    
+def build_schema_params(campos):
+    init_params = ", ".join(c["nome"] for c in campos)
+    return init_params
 
 # ---------- geração de conteúdo restante ----------
 
@@ -656,7 +662,8 @@ def build_schema_fields(campos):
         extra = ""
         if c["nome"].lower() in ("password","no_password","senha","pwd"):
             extra = ", load_only=True"
-        lines.append(f"    {c['nome']} = {mm}(allow_none={allow_none}{validate_part}{extra})")
+        lines.append(f"    {c['nome']} = ma.auto_field()")
+        #lines.append(f"    {c['nome']} = {mm}(allow_none={allow_none}{validate_part}{extra})")
     return "\n".join(lines)
 
 def build_service_file_augments(file_field_names, plural, bp_name):
@@ -761,10 +768,12 @@ def main():
 
     # SCHEMA
     schema_fields = build_schema_fields(campos)
+    fields_sch = build_schema_params(campos)
     schema_code = render(SCHEMA_TMPL, {
         "ClassName": class_name,
         "module_model": f"{module_prefix}_model",
-        "fields": schema_fields
+        "init_params": fields_sch,
+        "fields": schema_fields,
     })
 
     # SERVICE
